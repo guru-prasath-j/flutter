@@ -1,0 +1,71 @@
+name: Verify dart-lang/ai#692 fix
+
+on:
+  push:
+    branches: [ci-verify-692]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Add upstream so the tool can compute its version
+        run: |
+          git remote add upstream https://github.com/flutter/flutter.git
+          git fetch upstream master --tags --quiet
+      - name: flutter --version
+        run: ./bin/flutter --version
+      - name: VM test
+        id: vm
+        continue-on-error: true
+        working-directory: packages/flutter_driver
+        run: set -o pipefail; ../../bin/flutter test test/src/real_tests/screenshot_format_test.dart --reporter expanded 2>&1 | tee "$RUNNER_TEMP/vm.log"
+      - name: Chrome test
+        id: chrome
+        continue-on-error: true
+        working-directory: packages/flutter_driver
+        run: set -o pipefail; ../../bin/flutter test --platform chrome test/src/real_tests/screenshot_format_test.dart --reporter expanded 2>&1 | tee "$RUNNER_TEMP/chrome.log"
+      - name: All real_tests (VM)
+        id: all
+        continue-on-error: true
+        working-directory: packages/flutter_driver
+        run: set -o pipefail; ../../bin/flutter test test/src/real_tests/ 2>&1 | tee "$RUNNER_TEMP/all.log"
+      - name: Analyze flutter_driver
+        id: analyze
+        continue-on-error: true
+        working-directory: packages/flutter_driver
+        run: set -o pipefail; ../../bin/flutter analyze 2>&1 | tee "$RUNNER_TEMP/analyze.log"
+      - name: Format changed files
+        id: format
+        continue-on-error: true
+        working-directory: packages/flutter_driver
+        run: |
+          set -o pipefail
+          { ../../bin/dart format lib/src/common/handler_factory.dart test/src/real_tests/screenshot_format_test.dart && git diff --exit-code; } 2>&1 | tee "$RUNNER_TEMP/format.log"
+      - name: Summary
+        if: always()
+        env:
+          VM: ${{ steps.vm.outcome }}
+          CHROME: ${{ steps.chrome.outcome }}
+          ALL: ${{ steps.all.outcome }}
+          ANALYZE: ${{ steps.analyze.outcome }}
+          FORMAT: ${{ steps.format.outcome }}
+        run: |
+          echo "vm=$VM chrome=$CHROME all=$ALL analyze=$ANALYZE format=$FORMAT"
+          echo "::notice title=outcomes::vm=$VM chrome=$CHROME all=$ALL analyze=$ANALYZE format=$FORMAT"
+          for k in vm chrome all analyze format; do
+            f="$RUNNER_TEMP/$k.log"
+            [ -f "$f" ] || continue
+            body=$(tail -n 80 "$f" | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+            echo "::notice title=log-$k::$body"
+          done
+          [ "$VM$CHROME$ALL$ANALYZE$FORMAT" = "successsuccesssuccesssuccesssuccess" ]
